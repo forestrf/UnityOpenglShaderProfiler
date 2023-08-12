@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -44,7 +44,11 @@ public class OpenglShaderProfileWindow : EditorWindow
         string content = File.ReadAllText(filePath);
         //Debug.Log(File.ReadAllText(filePath));
         Regex regex =
+#if UNITY_2021_1_OR_NEWER
+            new Regex("((Keywords)|(No keywords))(.|\n)*?(///////////////////|\n\n }\n}\n})");
+#else
             new Regex("((Keywords)|(No keywords))(.|\n)*?-- Fragment shader");
+#endif
         MatchCollection ma = regex.Matches(content);
         for (int i = 0; i < ma.Count; i++)
         {
@@ -67,12 +71,19 @@ public class OpenglShaderProfileWindow : EditorWindow
                 si.keyWords = "NoKeyWords";
             }
             startIndex = text.IndexOf("#ifdef VERTEX", StringComparison.Ordinal) + 13;
-            endNum = text.IndexOf("#endif", StringComparison.Ordinal);
+            endNum = text.IndexOf("#endif\n#ifdef FRAGMENT", startIndex, StringComparison.Ordinal);
             si.vert = text.Substring(startIndex, endNum - startIndex);
+            //si.vert = si.vert.Insert(si.vert.IndexOf("\n", si.vert.IndexOf("#version")) + 1, "#extension GL_ARB_shader_storage_buffer_object : enable\n");
+            si.vert = si.vert.Replace("#define HLSLCC_ENABLE_UNIFORM_BUFFERS 1", "#define HLSLCC_ENABLE_UNIFORM_BUFFERS 0");
 
             startIndex = text.IndexOf("#ifdef FRAGMENT", StringComparison.Ordinal) + 16;
-            endNum = text.LastIndexOf("#endif", StringComparison.Ordinal);
+            endNum = text.IndexOf("#endif\n\n\n", startIndex, StringComparison.Ordinal);
             si.frag = text.Substring(startIndex, endNum - startIndex);
+            si.frag = si.frag.Insert(si.frag.IndexOf("\n", si.frag.IndexOf("#version")) + 1, "#extension GL_EXT_separate_shader_objects : enable\n");
+            si.frag = si.frag.Replace("#define HLSLCC_ENABLE_UNIFORM_BUFFERS 1", "#define HLSLCC_ENABLE_UNIFORM_BUFFERS 0");
+            si.frag = si.frag.Replace("#define UNITY_SUPPORTS_UNIFORM_LOCATION 1", "#define UNITY_SUPPORTS_UNIFORM_LOCATION 0");
+            si.frag = si.frag.Replace("dFdx", ""); // Idk why
+            si.frag = si.frag.Replace("dFdy", ""); // Idk why
             if (!si.frag.Contains("float;\n"))
             {
                 string first = si.frag.Substring(0, si.frag.IndexOf('\n') + 1);
@@ -169,7 +180,7 @@ public class OpenglShaderProfileWindow : EditorWindow
                 EditorGUILayout.EndScrollView();
                 return;
             }
-            OpenCompiledShader(shader, 3, 736973, false);
+            OpenCompiledShader(shader, 3, 1 << 9, false); // GLES3x = 9
             start = true;
             pastTime = 0;
             shaderComplete = false;
@@ -183,7 +194,11 @@ public class OpenglShaderProfileWindow : EditorWindow
             return;
         }
         if (showShaderInfo == 1)
+#if UNITY_2021_1_OR_NEWER
+            if (curEvent.type == EventType.Layout)
+#else
             if (curEvent.type == EventType.layout)
+#endif
             {
                 showShaderInfo = 2;
             }
@@ -223,7 +238,11 @@ public class OpenglShaderProfileWindow : EditorWindow
         cursorChangeRect0.height = outRect.height;
         if (Event.current.type == EventType.Repaint)
             EditorGUIUtility.AddCursorRect(cursorChangeRect0, MouseCursor.ResizeHorizontal);
+#if UNITY_2021_1_OR_NEWER
+        if (curEvent.type == EventType.MouseDown && cursorChangeRect0.Contains(curEvent.mousePosition))
+#else
         if (curEvent.type == EventType.mouseDown && cursorChangeRect0.Contains(curEvent.mousePosition))
+#endif
             cursor0Move = true;
         if (curEvent.type == EventType.MouseUp)
             cursor0Move = false;
@@ -288,16 +307,23 @@ public class OpenglShaderProfileWindow : EditorWindow
         return false;
     }
 
-    private static void OpenCompiledShader(Shader s, int mode, int customPlatformsMask, bool includeAllVariants)
+    private static void OpenCompiledShader(Shader s, int mode, int customPlatformsMask, bool includeAllVariants, bool preprocessOnly = false, bool stripLineDirectives = false)
     {
         ShaderUtilType.InvokeMember("OpenCompiledShader",
             BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.InvokeMethod, null, null,
-            new object[] {s, mode, customPlatformsMask, includeAllVariants});
+            new object[] {s, mode, customPlatformsMask, includeAllVariants
+#if UNITY_2021_1_OR_NEWER
+                , preprocessOnly, stripLineDirectives
+#endif
+            });
     }
 
     private void ProfileShader()
     {
-        string exePath = Application.dataPath + "/Editor/SharderProfile/PowerVR/GLSLESCompiler_Series6.exe";
+        var stackTrace = StackTraceUtility.ExtractStackTrace();
+        var pathFromScript = new Regex("Assets(/.+?)/[^/]+?\\.cs");
+        Match ma = pathFromScript.Match(stackTrace);
+        string exePath = Application.dataPath + ma.Groups[1] + "/PowerVR/GLSLESCompiler_Series6.exe";
         string vertPath = Application.dataPath.Substring(0, Application.dataPath.LastIndexOf('/')) + "/Temp/vert.txt";
         string vertProfilePath = Application.dataPath.Substring(0, Application.dataPath.LastIndexOf('/')) +
                                  "/Temp/vertProfile.txt";
@@ -348,6 +374,7 @@ public class OpenglShaderProfileWindow : EditorWindow
                 }
                 catch (Exception)
                 {
+                    if (myprocess.HasExited) return;
                     Thread.Sleep(30);
                 }
 
